@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>NEON SHIFT</title>
+<title>NEON SHIFT 3</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -117,8 +117,85 @@ function sfxMove() {
   playTone(120, 'square', 0.03, 0.03);
 }
 
+function sfxPowerUp() {
+  initAudio();
+  // Magical ascending chime
+  const notes = [523, 659, 784, 1047, 1319];
+  notes.forEach((f, i) => playTone(f, 'sine', 0.1, 0.13, audioCtx.currentTime + i * 0.06));
+}
+
+function sfxPowerEnd() {
+  initAudio();
+  // Descending warn — power wearing off
+  const notes = [880, 660, 440, 330];
+  notes.forEach((f, i) => playTone(f, 'square', 0.08, 0.08, audioCtx.currentTime + i * 0.05));
+}
+
 let lastSfxScore = 0;
 let laserWarnPlayed = new Set();
+
+// ─── ADMOB ───────────────────────────────────────────────
+const AD_UNIT_ID = 'ca-app-pub-8800005383508089/3053133462';
+let adLoaded = false;
+let adWatched = false; // only 1 continue per game session
+let showingAd = false;
+
+async function initAdMob() {
+  try {
+    const { AdMob } = window.Capacitor?.Plugins || {};
+    if (!AdMob) return;
+    await AdMob.initialize({ testingDevices: [], initializeForTesting: false });
+    loadRewardedAd();
+  } catch(e) { console.log('AdMob init error:', e); }
+}
+
+async function loadRewardedAd() {
+  try {
+    const { AdMob } = window.Capacitor?.Plugins || {};
+    if (!AdMob) return;
+    await AdMob.prepareRewardVideoAd({ adId: AD_UNIT_ID });
+    adLoaded = true;
+  } catch(e) { console.log('Ad load error:', e); }
+}
+
+async function showRewardedAd() {
+  try {
+    const { AdMob } = window.Capacitor?.Plugins || {};
+    if (!AdMob || !adLoaded) {
+      // No ad available — give free continue anyway (fallback)
+      continueGame();
+      return;
+    }
+    showingAd = true;
+    const result = await AdMob.showRewardVideoAd();
+    showingAd = false;
+    if (result?.value) {
+      // Player watched the full ad — reward them
+      adWatched = true;
+      adLoaded = false;
+      continueGame();
+      loadRewardedAd(); // preload next ad
+    }
+  } catch(e) {
+    showingAd = false;
+    console.log('Ad show error:', e);
+    continueGame(); // fallback — give continue anyway
+  }
+}
+
+function continueGame() {
+  // Revive player at safe position, keep score
+  state = 'play';
+  P.alive = true;
+  P.x = W / 2;
+  P.vx = 0;
+  P.trail = [];
+  // Clear nearby obstacles so player isn't immediately killed
+  spikes = spikes.filter(s => Math.abs(s.y - P.y) > 120);
+  lasers = lasers.filter(l => Math.abs(l.x - P.x) > 100);
+  particles = [];
+  makeStars();
+}
 
 // ─── STATE ───────────────────────────────────────────────
 let state = 'start';
@@ -148,6 +225,12 @@ let particles = [];
 let stars = [];
 let menuParticles = [];
 let hexagons = [];
+let powerups = [];
+
+// ─── POWER-UP STATE ──────────────────────────────────────
+const SHRINK_DURATION = 300; // frames (~5 seconds)
+let shrinkTimer = 0;
+let shrinking = false;
 
 function makeStars() {
   stars = [];
@@ -190,6 +273,27 @@ window.addEventListener('keyup', e => {
 
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
+  if (state === 'dead') {
+    if (deadTimer <= 60) return; // wait for buttons to appear
+    const cx = W / 2;
+    const touch = e.changedTouches[0];
+    const tx = touch.clientX, ty = touch.clientY;
+    const btnW = Math.min(W * 0.78, 300);
+    const btnH = H * 0.068;
+    const adBtnY = H * 0.78;
+    const retryBtnY = adWatched ? H * 0.82 : H * 0.895;
+    // Watch Ad button
+    if (!adWatched && Math.abs(tx - cx) < btnW/2 && Math.abs(ty - adBtnY) < btnH/2) {
+      showRewardedAd();
+      return;
+    }
+    // Retry button
+    if (Math.abs(tx - cx) < btnW/2 && Math.abs(ty - retryBtnY) < btnH/2) {
+      beginGame();
+      return;
+    }
+    return;
+  }
   if (state !== 'play') { beginGame(); return; }
   for (const t of e.changedTouches) {
     if (t.clientX < W / 2) keys.left  = true;
@@ -209,6 +313,22 @@ canvas.addEventListener('touchend', e => {
 canvas.addEventListener('touchcancel', () => { keys.left = keys.right = false; });
 
 canvas.addEventListener('mousedown', e => {
+  if (state === 'dead') {
+    if (deadTimer <= 60) return;
+    const cx = W / 2;
+    const mx = e.clientX, my = e.clientY;
+    const btnW = Math.min(W * 0.78, 300);
+    const btnH = H * 0.068;
+    const adBtnY = H * 0.78;
+    const retryBtnY = adWatched ? H * 0.82 : H * 0.895;
+    if (!adWatched && Math.abs(mx - cx) < btnW/2 && Math.abs(my - adBtnY) < btnH/2) {
+      showRewardedAd(); return;
+    }
+    if (Math.abs(mx - cx) < btnW/2 && Math.abs(my - retryBtnY) < btnH/2) {
+      beginGame(); return;
+    }
+    return;
+  }
   if (state !== 'play') { beginGame(); return; }
   if (e.clientX < W / 2) keys.left  = true;
   else                    keys.right = true;
@@ -221,8 +341,10 @@ function beginGame() {
   sfxStart();
   state = 'play';
   frame = 0; score = 0; lastSfxScore = 0;
+  adWatched = false;
+  shrinkTimer = 0; shrinking = false; P.w = 30;
   laserWarnPlayed = new Set();
-  spikes = []; lasers = []; particles = [];
+  spikes = []; lasers = []; particles = []; powerups = [];
   P.reset();
   makeStars();
 }
@@ -343,7 +465,56 @@ function update() {
     });
   }
 
-  // Update spikes
+  // ── Shrink power-up timer ──
+  if (shrinking) {
+    shrinkTimer--;
+    // Warn player when 3 seconds left
+    if (shrinkTimer === 90) sfxPowerEnd();
+    if (shrinkTimer <= 0) {
+      shrinking = false;
+      P.w = 30; // back to normal size
+    }
+  }
+
+  // Spawn power-up every ~400 frames, randomly
+  if (frame % 400 === 200) {
+    powerups.push({
+      x: 40 + Math.random() * (W - 80),
+      y: -30,
+      vy: 1.8 + Math.random() * 0.8,
+      r: 14,
+      pulse: Math.random() * Math.PI * 2,
+      collected: false
+    });
+  }
+
+  // Update power-ups
+  for (let i = powerups.length - 1; i >= 0; i--) {
+    const pu = powerups[i];
+    pu.y += pu.vy;
+    pu.pulse += 0.08;
+    if (pu.y > H + 30) { powerups.splice(i, 1); continue; }
+    // Collection check
+    const dx = P.x - pu.x, dy = P.y - pu.y;
+    if (Math.sqrt(dx*dx + dy*dy) < pu.r + P.w * 0.5) {
+      // Collected!
+      powerups.splice(i, 1);
+      shrinking = true;
+      shrinkTimer = SHRINK_DURATION;
+      P.w = 14; // shrink to less than half size
+      sfxPowerUp();
+      // Spawn collect particles
+      for (let j = 0; j < 20; j++) {
+        const a = (Math.PI * 2 * j) / 20;
+        particles.push({
+          x: pu.x, y: pu.y,
+          vx: Math.cos(a) * (2 + Math.random() * 3),
+          vy: Math.sin(a) * (2 + Math.random() * 3),
+          life: 1, col: '#00ff88', r: 2 + Math.random() * 3
+        });
+      }
+    }
+  }
   for (let i = spikes.length - 1; i >= 0; i--) {
     const s = spikes[i];
     s.y += s.vy;
@@ -622,6 +793,88 @@ function drawParticles() {
   noGlow();
 }
 
+function drawPowerups() {
+  for (const pu of powerups) {
+    const pulse = 0.7 + 0.3 * Math.sin(pu.pulse);
+    // Outer glow ring
+    ctx.globalAlpha = 0.25 * pulse;
+    glow('#00ff88', 20);
+    ctx.strokeStyle = '#00ff88';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(pu.x, pu.y, pu.r + 8, 0, Math.PI*2); ctx.stroke();
+    // Inner circle
+    ctx.globalAlpha = 0.9 * pulse;
+    ctx.fillStyle = '#00ff88';
+    glow('#00ff88', 16);
+    ctx.beginPath(); ctx.arc(pu.x, pu.y, pu.r, 0, Math.PI*2); ctx.fill();
+    // Small diamond icon inside
+    noGlow();
+    ctx.fillStyle = '#000';
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.moveTo(pu.x, pu.y - 6);
+    ctx.lineTo(pu.x + 5, pu.y);
+    ctx.lineTo(pu.x, pu.y + 6);
+    ctx.lineTo(pu.x - 5, pu.y);
+    ctx.closePath();
+    ctx.fill();
+    // Rotating sparkles around it
+    for (let i = 0; i < 4; i++) {
+      const a = pu.pulse + (Math.PI / 2) * i;
+      const sx = pu.x + Math.cos(a) * (pu.r + 14);
+      const sy = pu.y + Math.sin(a) * (pu.r + 14);
+      ctx.globalAlpha = 0.6 * pulse;
+      ctx.fillStyle = '#00ff88';
+      glow('#00ff88', 8);
+      ctx.beginPath(); ctx.arc(sx, sy, 2.5, 0, Math.PI*2); ctx.fill();
+    }
+    noGlow();
+    ctx.globalAlpha = 1;
+    // SHRINK label above
+    ctx.fillStyle = '#00ff88';
+    ctx.font = `bold ${Math.round(H * 0.016)}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.globalAlpha = pulse;
+    ctx.fillText('SHRINK', pu.x, pu.y - pu.r - 12);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawShrinkHUD() {
+  if (!shrinking) return;
+  const barW = Math.min(W * 0.5, 200);
+  const barH = 8;
+  const barX = W / 2 - barW / 2;
+  const barY = 90;
+  const pct = shrinkTimer / SHRINK_DURATION;
+  const col = pct > 0.4 ? '#00ff88' : '#ff8800';
+
+  // Background
+  ctx.globalAlpha = 0.3;
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.roundRect(barX, barY, barW, barH, 4);
+  ctx.fill();
+
+  // Fill
+  ctx.globalAlpha = 1;
+  glow(col, 12);
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.roundRect(barX, barY, barW * pct, barH, 4);
+  ctx.fill();
+  noGlow();
+
+  // Label
+  ctx.fillStyle = col;
+  ctx.font = `bold ${Math.round(H * 0.018)}px monospace`;
+  ctx.textAlign = 'center';
+  glow(col, 8);
+  ctx.fillText('▼ SHRINK', W / 2, barY - 4);
+  noGlow();
+  ctx.globalAlpha = 1;
+}
+
 function drawHUD() {
   ctx.textAlign = 'center';
   glow('#0ff', 14);
@@ -749,12 +1002,15 @@ function drawMenuLogo() {
   ctx.stroke();
   noGlow();
 
-  // Button text
+  // Button text — vertically centered inside button
   ctx.globalAlpha = pulse;
   ctx.fillStyle = '#fff';
-  ctx.font = `bold ${Math.round(H * 0.034)}px monospace`;
+  const startFontSize = Math.round(H * 0.030);
+  ctx.font = `bold ${startFontSize}px monospace`;
+  ctx.textBaseline = 'middle';
   glow('#0ff', 10);
-  ctx.fillText('▶  TAP TO START', cx, btnY + Math.round(H * 0.012));
+  ctx.fillText('▶  TAP TO START', cx, btnY);
+  ctx.textBaseline = 'alphabetic';
   noGlow();
   ctx.globalAlpha = 1;
 
@@ -861,29 +1117,65 @@ function drawDead() {
 
   if (deadTimer > 60) {
     const pulse = 0.6 + 0.4 * Math.sin(Date.now() / 420);
-    const btnY = H * 0.84;
-    const btnW = Math.min(W * 0.6, 240);
-    const btnH = H * 0.065;
+    const cx = W / 2;
+    const btnW = Math.min(W * 0.78, 300);
+    const btnH = H * 0.068;
+    ctx.textBaseline = 'middle';
 
+    // ── WATCH AD BUTTON (only show once per session) ──
+    if (!adWatched) {
+      const adBtnY = H * 0.78;
+      // Gold background
+      ctx.globalAlpha = 0.2 * pulse;
+      ctx.fillStyle = '#ffaa00';
+      roundRect(cx - btnW/2, adBtnY - btnH/2, btnW, btnH, 10);
+      ctx.fill();
+      // Gold border
+      ctx.globalAlpha = pulse;
+      glow('#ffaa00', 22);
+      ctx.strokeStyle = '#ffaa00';
+      ctx.lineWidth = 2.5;
+      roundRect(cx - btnW/2, adBtnY - btnH/2, btnW, btnH, 10);
+      ctx.stroke();
+      noGlow();
+      // Button text — perfectly centered
+      ctx.globalAlpha = pulse;
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold ${Math.round(H * 0.026)}px monospace`;
+      glow('#ffaa00', 10);
+      ctx.fillText('▶ WATCH AD · CONTINUE', cx, adBtnY);
+      noGlow();
+      ctx.globalAlpha = 1;
+      // Small info text below
+      ctx.globalAlpha = 0.6;
+      ctx.fillStyle = '#ffdd88';
+      ctx.font = `${Math.round(H * 0.016)}px monospace`;
+      ctx.fillText('keep your score!', cx, adBtnY + btnH/2 + 14);
+      ctx.globalAlpha = 1;
+    }
+
+    // ── RETRY BUTTON ──
+    const retryBtnY = adWatched ? H * 0.82 : H * 0.895;
     ctx.globalAlpha = 0.12 * pulse;
     ctx.fillStyle = '#0ff';
-    roundRect(W/2 - btnW/2, btnY - btnH/2, btnW, btnH, 8);
+    roundRect(cx - btnW/2, retryBtnY - btnH/2, btnW, btnH, 10);
     ctx.fill();
-
-    ctx.globalAlpha = pulse * 0.9;
+    ctx.globalAlpha = pulse * 0.85;
     glow('#0ff', 16);
     ctx.strokeStyle = '#0ff';
     ctx.lineWidth = 2;
-    roundRect(W/2 - btnW/2, btnY - btnH/2, btnW, btnH, 8);
+    roundRect(cx - btnW/2, retryBtnY - btnH/2, btnW, btnH, 10);
     ctx.stroke();
-
+    noGlow();
+    // Button text — perfectly centered
     ctx.globalAlpha = pulse;
     ctx.fillStyle = '#fff';
-    ctx.font = `bold ${Math.round(H * 0.03)}px monospace`;
+    ctx.font = `bold ${Math.round(H * 0.026)}px monospace`;
     glow('#0ff', 8);
-    ctx.fillText('▶  TAP TO RETRY', W/2, btnY + Math.round(H * 0.01));
+    ctx.fillText('▶  TAP TO RETRY', cx, retryBtnY);
     noGlow();
     ctx.globalAlpha = 1;
+    ctx.textBaseline = 'alphabetic';
   }
 }
 
@@ -891,13 +1183,14 @@ function drawDead() {
 function loop() {
   update();
   if (state === 'start')     drawStart();
-  else if (state === 'play') { drawBG(); drawParticles(); drawLasers(); drawSpikes(); drawPlayer(); drawHUD(); }
+  else if (state === 'play') { drawBG(); drawParticles(); drawPowerups(); drawLasers(); drawSpikes(); drawPlayer(); drawHUD(); drawShrinkHUD(); }
   else if (state === 'dead') drawDead();
   requestAnimationFrame(loop);
 }
 
 makeStars();
 makeHexagons();
+initAdMob();
 loop();
 </script>
 </body>
