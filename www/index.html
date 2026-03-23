@@ -17,6 +17,11 @@ const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 let W = canvas.width = window.innerWidth;
 let H = canvas.height = window.innerHeight;
+
+// Safe zones for notch/navigation bar
+const SAFEt = 48; // top safe padding
+const SAFEb = 52; // bottom safe padding
+
 window.addEventListener('resize', () => {
   W = canvas.width = window.innerWidth;
   H = canvas.height = window.innerHeight;
@@ -166,32 +171,29 @@ function triggerShake(mag, dur) {
 }
 
 // ─── GYROSCOPE ───────────────────────────
-let gyroGamma = 0; // tilt left/right angle
-const GYRO_SENS = { low: 0.018, medium: 0.035, high: 0.06 };
+let gyroGamma = 0;
+let gyroListening = false;
+// Very different sensitivity levels
+const GYRO_SENS = { low: 0.012, medium: 0.045, high: 0.10 };
 
-function initGyro() {
-  if (typeof DeviceOrientationEvent === 'undefined') return;
-  // iOS 13+ requires permission
-  if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-    DeviceOrientationEvent.requestPermission()
-      .then(r => { if (r==='granted') window.addEventListener('deviceorientation', onGyro); })
-      .catch(() => {});
-  } else {
-    window.addEventListener('deviceorientation', onGyro);
-  }
-}
 function onGyro(e) {
-  if (e.gamma !== null) gyroGamma = e.gamma; // -90 to 90, left/right tilt
+  if (e.gamma !== null) gyroGamma = e.gamma;
 }
-// Request gyro when user picks it
 function requestGyro() {
+  if (gyroListening) return; // already listening
   if (typeof DeviceOrientationEvent !== 'undefined' &&
       typeof DeviceOrientationEvent.requestPermission === 'function') {
     DeviceOrientationEvent.requestPermission()
-      .then(r => { if (r==='granted') window.addEventListener('deviceorientation', onGyro); })
-      .catch(() => {});
+      .then(r => {
+        if (r==='granted') {
+          window.addEventListener('deviceorientation', onGyro);
+          gyroListening = true;
+        }
+      }).catch(() => {});
   } else {
+    window.removeEventListener('deviceorientation', onGyro); // remove old first
     window.addEventListener('deviceorientation', onGyro);
+    gyroListening = true;
   }
 }
 
@@ -258,19 +260,19 @@ canvas.addEventListener('touchstart', e => {
   // ── DEAD SCREEN ──
   if (state === 'dead') {
     if (deadTimer <= 60) return;
-    const bW = Math.min(W*0.78, 300), bH = H*0.068;
-    const adY    = H*0.72;
-    const retryY = adWatched ? H*0.78 : H*0.82;
-    const diffY  = H*0.895;
-    const menuY  = H*0.952;
+    const bW = Math.min(W*0.82, 310), bH = H*0.065;
+    const adY    = H*0.645;
+    const retryY = adWatched ? H*0.645 : H*0.760;
+    const diffY  = H*0.872;
+    const menuY  = H*0.938;
     if (!adWatched && Math.abs(tx-cx)<bW/2 && Math.abs(ty-adY)<bH/2) { showRewardedAd(); return; }
     if (Math.abs(tx-cx)<bW/2 && Math.abs(ty-retryY)<bH/2) { beginGame(); return; }
-    const dBtnW=Math.min(W*0.25,88), dGap=8;
+    const dBtnW=Math.min(W*0.26,92), dGap=8;
     const dTotalW=dBtnW*3+dGap*2, dStartX=cx-dTotalW/2;
     const diffs=['easy','normal','hard'];
     for (let i=0;i<3;i++) {
       const bx=dStartX+i*(dBtnW+dGap);
-      if (tx>=bx&&tx<=bx+dBtnW&&Math.abs(ty-diffY)<H*0.048) { difficulty=diffs[i]; return; }
+      if (tx>=bx&&tx<=bx+dBtnW&&Math.abs(ty-diffY)<H*0.046) { difficulty=diffs[i]; return; }
     }
     if (Math.abs(ty-menuY)<H*0.035) { state='menu'; return; }
     return;
@@ -312,17 +314,17 @@ canvas.addEventListener('mousedown', e => {
   if (state==='settings') { handleSettingsTap(mx,my); return; }
   if (state==='dead') {
     if (deadTimer<=60) return;
-    const bW=Math.min(W*0.78,300), bH=H*0.068;
-    const adY=H*0.72, retryY=adWatched?H*0.78:H*0.82;
-    const diffY=H*0.895, menuY=H*0.952;
+    const bW=Math.min(W*0.82,310), bH=H*0.065;
+    const adY=H*0.645, retryY=adWatched?H*0.645:H*0.760;
+    const diffY=H*0.872, menuY=H*0.938;
     if (!adWatched&&Math.abs(mx-cx)<bW/2&&Math.abs(my-adY)<bH/2) { showRewardedAd(); return; }
     if (Math.abs(mx-cx)<bW/2&&Math.abs(my-retryY)<bH/2) { beginGame(); return; }
-    const dBtnW=Math.min(W*0.25,88), dGap=8;
+    const dBtnW=Math.min(W*0.26,92), dGap=8;
     const dStartX=cx-(dBtnW*3+dGap*2)/2;
     const diffs=['easy','normal','hard'];
     for (let i=0;i<3;i++) {
       const bx=dStartX+i*(dBtnW+dGap);
-      if (mx>=bx&&mx<=bx+dBtnW&&Math.abs(my-diffY)<H*0.048) { difficulty=diffs[i]; return; }
+      if (mx>=bx&&mx<=bx+dBtnW&&Math.abs(my-diffY)<H*0.046) { difficulty=diffs[i]; return; }
     }
     if (Math.abs(my-menuY)<H*0.035) { state='menu'; return; }
     return;
@@ -418,6 +420,7 @@ function update() {
     if (slowTimer<=0) slowing=false;
   }
   const speedMult = slowing ? 0.4 : 1;
+  const spawnMult = slowing ? 2.5 : 1; // slow = much longer interval between spawns
 
   // Score blip
   if (score>0 && score%10===0 && score!==lastSfxScore) { lastSfxScore=score; sfxScore(); }
@@ -432,8 +435,10 @@ function update() {
   const maxVX = 7+spd*0.4;
   if (S.controls === 'gyro') {
     const sens = GYRO_SENS[S.gyroSens];
-    P.vx += gyroGamma * sens;
-    P.vx *= 0.85;
+    const deadzone = 2.5; // ignore tiny tilts
+    const tilt = Math.abs(gyroGamma) > deadzone ? gyroGamma : 0;
+    P.vx += tilt * sens;
+    P.vx *= 0.80; // friction
   } else {
     if (keys.left)  P.vx-=1.6;
     if (keys.right) P.vx+=1.6;
@@ -446,8 +451,8 @@ function update() {
   P.trail.unshift({x:P.x,y:P.y});
   if (P.trail.length>14) P.trail.pop();
 
-  // Spawn spikes — interval shrinks over time, capped by difficulty
-  const spikeInterval = Math.max(D.spikeInt * 0.4, D.spikeInt - frame/30);
+  // Spawn spikes
+  const spikeInterval = Math.max(D.spikeInt * 0.4, D.spikeInt - frame/30) * spawnMult;
   if (frame % Math.max(1, Math.floor(spikeInterval)) === 0) {
     const sz = 18 + Math.random()*18 + D.szBonus;
     spikes.push({
@@ -458,8 +463,8 @@ function update() {
     });
   }
 
-  // Spawn lasers — fixed interval that shrinks slowly, based on difficulty
-  const laserInterval = Math.max(D.laserInt * 0.5, D.laserInt - frame/20);
+  // Spawn lasers
+  const laserInterval = Math.max(D.laserInt * 0.5, D.laserInt - frame/20) * spawnMult;
   if (frame % Math.max(1, Math.floor(laserInterval)) === 0) {
     const bW = 28 + Math.random()*20 + D.szBonus*0.5;
     lasers.push({
@@ -625,11 +630,6 @@ function drawPlayer() {
   ctx.beginPath(); ctx.moveTo(x,y-s); ctx.lineTo(x+s*0.7,y); ctx.lineTo(x,y+s*0.7); ctx.lineTo(x-s*0.7,y); ctx.closePath(); ctx.fill();
   noGlow(); ctx.fillStyle='#fff';
   ctx.beginPath(); ctx.moveTo(x,y-s*0.45); ctx.lineTo(x+s*0.32,y); ctx.lineTo(x,y+s*0.32); ctx.lineTo(x-s*0.32,y); ctx.closePath(); ctx.fill();
-  // Touch hints
-  ctx.globalAlpha=0.15; ctx.fillStyle=T.accent;
-  ctx.font=`${Math.round(H*0.05)}px monospace`; ctx.textAlign='center';
-  ctx.fillText('◄',W*0.15,H-28); ctx.fillText('►',W*0.85,H-28);
-  ctx.globalAlpha=1;
 }
 
 // ═══════════════════════════════════════════
@@ -734,17 +734,18 @@ function drawParticles() {
 function drawHUD() {
   const T=getTheme();
   ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+  const topY = SAFEt + Math.round(H*0.042); // safe top
 
   // Score — top center
   glow(T.accent,14); ctx.fillStyle=T.accent;
-  ctx.font=`bold ${Math.round(H*0.042)}px monospace`;
-  ctx.fillText(String(score).padStart(4,'0'),W/2,46);
+  ctx.font=`bold ${Math.round(H*0.048)}px monospace`;
+  ctx.fillText(String(score).padStart(4,'0'),W/2,topY);
   noGlow();
   ctx.fillStyle='rgba(255,255,255,0.45)';
-  ctx.font=`${Math.round(H*0.020)}px monospace`;
-  ctx.fillText('BEST '+String(hiScore).padStart(4,'0'),W/2,70);
+  ctx.font=`${Math.round(H*0.022)}px monospace`;
+  ctx.fillText('BEST '+String(hiScore).padStart(4,'0'),W/2,topY+Math.round(H*0.030));
 
-  // Combo — top RIGHT, clean and separate
+  // Combo — top RIGHT
   if (combo>=2) {
     const lvl=combo<=3?1:combo<=6?2:3;
     const comboColors=['#fff','#0ff','#f0f','#ff0'];
@@ -752,51 +753,61 @@ function drawHUD() {
     const ccol=comboColors[lvl];
     const mult=comboMults[lvl];
     const pulse=0.75+0.25*Math.sin(menuFrame/8);
-    ctx.globalAlpha=pulse;
-    ctx.textAlign='right';
-    glow(ccol,14);
-    ctx.fillStyle=ccol;
-    ctx.font=`bold ${Math.round(H*0.036)}px monospace`;
-    ctx.fillText(`x${mult}`,W-14,44);
-    ctx.font=`${Math.round(H*0.016)}px monospace`;
+    ctx.globalAlpha=pulse; ctx.textAlign='right';
+    glow(ccol,14); ctx.fillStyle=ccol;
+    ctx.font=`bold ${Math.round(H*0.040)}px monospace`;
+    ctx.fillText(`x${mult}`,W-16,topY);
+    ctx.font=`${Math.round(H*0.018)}px monospace`;
     ctx.fillStyle='rgba(255,255,255,0.7)';
-    ctx.fillText(`COMBO ${combo}`,W-14,62);
+    ctx.fillText(`COMBO ${combo}`,W-16,topY+Math.round(H*0.026));
     noGlow(); ctx.globalAlpha=1; ctx.textAlign='center';
   }
 
-  // Theme name — top left, subtle
-  ctx.textAlign='left'; ctx.globalAlpha=0.3;
-  ctx.fillStyle=T.accent;
-  ctx.font=`${Math.round(H*0.016)}px monospace`;
-  ctx.fillText(T.name,12,22);
+  // Theme name — top left
+  ctx.textAlign='left'; ctx.globalAlpha=0.3; ctx.fillStyle=T.accent;
+  ctx.font=`${Math.round(H*0.018)}px monospace`;
+  ctx.fillText(T.name,14,topY);
   ctx.globalAlpha=1; ctx.textAlign='center';
 
-  // Slow bar
+  // Slow bar — below score
+  const barBaseY = topY + Math.round(H*0.060);
   if (slowing) {
-    const bW=Math.min(W*0.45,180), bH=7, bX=W/2-bW/2, bY=82;
+    const bW=Math.min(W*0.45,180), bH=8, bX=W/2-bW/2;
     const pct=slowTimer/SLOW_DUR;
     const bcol=pct>0.4?'#4af':'#ff8800';
     ctx.globalAlpha=0.25; ctx.fillStyle='#fff';
-    ctx.beginPath(); ctx.roundRect(bX,bY,bW,bH,4); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(bX,barBaseY,bW,bH,4); ctx.fill();
     ctx.globalAlpha=1; glow(bcol,10); ctx.fillStyle=bcol;
-    ctx.beginPath(); ctx.roundRect(bX,bY,bW*pct,bH,4); ctx.fill();
+    ctx.beginPath(); ctx.roundRect(bX,barBaseY,bW*pct,bH,4); ctx.fill();
     noGlow();
-    ctx.fillStyle=bcol; ctx.font=`bold ${Math.round(H*0.015)}px monospace`;
-    ctx.textAlign='center'; ctx.fillText('❄ SLOW',W/2,bY-4);
+    ctx.fillStyle=bcol; ctx.font=`bold ${Math.round(H*0.018)}px monospace`;
+    ctx.textAlign='center'; ctx.fillText('❄ SLOW',W/2,barBaseY-5);
   }
 
   // Shield indicator
   if (shielded) {
-    const sY=slowing?98:84;
+    const shY = slowing ? barBaseY+24 : barBaseY;
     const pulse2=0.6+0.4*Math.sin(menuFrame/12);
-    ctx.globalAlpha=pulse2; glow('#ffaa00',12);
-    ctx.fillStyle='#ffaa00';
-    ctx.font=`bold ${Math.round(H*0.016)}px monospace`;
-    ctx.textAlign='center';
-    ctx.fillText('🛡 SHIELD',W/2,sY);
+    ctx.globalAlpha=pulse2; glow('#ffaa00',12); ctx.fillStyle='#ffaa00';
+    ctx.font=`bold ${Math.round(H*0.018)}px monospace`;
+    ctx.textAlign='center'; ctx.fillText('🛡 SHIELD',W/2,shY+14);
     noGlow(); ctx.globalAlpha=1;
   }
 
+  // Touch hints at bottom — safe zone
+  if (S.controls==='touch') {
+    ctx.globalAlpha=0.15; ctx.fillStyle=T.accent;
+    ctx.font=`${Math.round(H*0.055)}px monospace`; ctx.textAlign='center';
+    ctx.fillText('◄',W*0.15,H-SAFEb-8);
+    ctx.fillText('►',W*0.85,H-SAFEb-8);
+    ctx.globalAlpha=1;
+  } else {
+    // Gyro indicator at bottom
+    ctx.globalAlpha=0.2; ctx.fillStyle='#fa0';
+    ctx.font=`${Math.round(H*0.018)}px monospace`;
+    ctx.fillText('~ GYRO ~',W/2,H-SAFEb-8);
+    ctx.globalAlpha=1;
+  }
   ctx.textAlign='center';
 }
 
@@ -816,8 +827,14 @@ function handleSettingsTap(tx, ty) {
   if (Math.abs(ty-(startY+rowH*1))<rowH/2) { S.shake=!S.shake; saveSettings(); return; }
   // Controls — touch/gyro
   if (Math.abs(ty-(startY+rowH*2))<rowH/2) {
-    if (S.controls==='touch') { S.controls='gyro'; requestGyro(); }
-    else S.controls='touch';
+    if (S.controls==='touch') {
+      S.controls='gyro';
+      gyroListening = false; // force re-request
+      requestGyro();
+    } else {
+      S.controls='touch';
+      keys.left=false; keys.right=false;
+    }
     saveSettings(); return;
   }
   // Gyro sensitivity — only if gyro active
@@ -1019,79 +1036,89 @@ function drawDead() {
   const cx=W/2;
   ctx.textAlign='center'; ctx.textBaseline='alphabetic';
 
-  // GAME OVER
+  // ── GAME OVER ──
   ctx.font=`bold ${Math.round(H*0.092)}px monospace`;
   glow('#f0f',40); ctx.fillStyle='rgba(255,0,255,0.12)';
-  ctx.fillText('GAME',cx,H*0.26); ctx.fillText('OVER',cx,H*0.38);
+  ctx.fillText('GAME',cx,H*0.22); ctx.fillText('OVER',cx,H*0.34);
   glow('#f0f',20); ctx.fillStyle='#f0f';
-  ctx.fillText('GAME',cx,H*0.26); ctx.fillText('OVER',cx,H*0.38);
+  ctx.fillText('GAME',cx,H*0.22); ctx.fillText('OVER',cx,H*0.34);
   noGlow();
 
-  // Score box
-  const sbY=H*0.50, sbW=Math.min(W*0.62,250), sbH=H*0.10;
+  // ── Score box ──
+  const sbY=H*0.455, sbW=Math.min(W*0.62,250), sbH=H*0.10;
   ctx.globalAlpha=0.1; ctx.fillStyle='#0ff';
   roundRect(cx-sbW/2,sbY-sbH/2,sbW,sbH,10); ctx.fill();
   ctx.globalAlpha=0.3; ctx.strokeStyle='#0ff'; ctx.lineWidth=1.5;
   roundRect(cx-sbW/2,sbY-sbH/2,sbW,sbH,10); ctx.stroke();
   ctx.globalAlpha=1; ctx.fillStyle='#0ff';
-  ctx.font=`${Math.round(H*0.020)}px monospace`; ctx.fillText('SCORE',cx,sbY-8);
+  ctx.font=`${Math.round(H*0.020)}px monospace`;
+  ctx.fillText('SCORE',cx,sbY-6);
   glow('#0ff',14); ctx.font=`bold ${Math.round(H*0.042)}px monospace`;
   ctx.fillText(String(score).padStart(4,'0'),cx,sbY+H*0.032); noGlow();
 
-  // New best
+  // ── New best ──
   if (score>0&&score>=hiScore) {
     const p2=0.5+0.5*Math.sin(Date.now()/300);
     ctx.globalAlpha=p2; glow('#ff0',18); ctx.fillStyle='#ff0';
-    ctx.font=`bold ${Math.round(H*0.028)}px monospace`;
-    ctx.fillText('✦  NEW BEST  ✦',cx,H*0.64);
+    ctx.font=`bold ${Math.round(H*0.026)}px monospace`;
+    ctx.fillText('✦  NEW BEST  ✦',cx,H*0.565);
     ctx.globalAlpha=1; noGlow();
   }
 
+  // ── Best score — shown clearly, not overlapping anything ──
   ctx.fillStyle='rgba(255,255,255,0.3)';
   ctx.font=`${Math.round(H*0.019)}px monospace`;
-  ctx.fillText('BEST: '+String(hiScore).padStart(4,'0'),cx,H*0.70);
+  ctx.fillText('BEST: '+String(hiScore).padStart(4,'0'),cx,H*0.598);
 
   if (deadTimer>60) {
     const pulse=0.6+0.4*Math.sin(Date.now()/420);
-    const bW=Math.min(W*0.78,300), bH=H*0.068;
+    const bW=Math.min(W*0.82,310), bH=H*0.065;
+    const adY       = H*0.645;
+    const keepY     = adY + bH/2 + 18;   // text sits right below ad button
+    const retryY    = adWatched ? H*0.645 : H*0.760;  // pushed further down
+    const diffLabelY= H*0.828;
+    const diffY     = H*0.872;
+    const menuY     = H*0.938;
 
-    // Watch Ad button
+    // ── Watch Ad button ──
     if (!adWatched) {
-      const adY=H*0.72;
       ctx.globalAlpha=0.2*pulse; ctx.fillStyle='#ffaa00';
       roundRect(cx-bW/2,adY-bH/2,bW,bH,10); ctx.fill();
       ctx.globalAlpha=pulse; glow('#ffaa00',22); ctx.strokeStyle='#ffaa00'; ctx.lineWidth=2.5;
       roundRect(cx-bW/2,adY-bH/2,bW,bH,10); ctx.stroke(); noGlow();
       ctx.globalAlpha=pulse; ctx.fillStyle='#fff';
-      ctx.font=`bold ${Math.round(H*0.026)}px monospace`;
+      ctx.font=`bold ${Math.round(H*0.024)}px monospace`;
       ctx.textBaseline='middle'; glow('#ffaa00',10);
       ctx.fillText('▶ WATCH AD · CONTINUE',cx,adY); noGlow();
       ctx.textBaseline='alphabetic';
-      ctx.globalAlpha=0.55; ctx.fillStyle='#ffdd88';
-      ctx.font=`${Math.round(H*0.015)}px monospace`;
-      ctx.fillText('keep your score!',cx,adY+bH/2+14);
+      // "keep your score!" — sits in the gap between ad and retry buttons
+      ctx.globalAlpha=0.7; ctx.fillStyle='#ffdd88';
+      ctx.font=`${Math.round(H*0.016)}px monospace`;
+      ctx.textBaseline='middle';
+      ctx.fillText('★  keep your score!  ★',cx,keepY + (retryY - bH/2 - keepY)/2);
+      ctx.textBaseline='alphabetic';
       ctx.globalAlpha=1;
     }
 
-    // Retry button
-    const retryY=adWatched?H*0.78:H*0.82;
+    // ── Retry button ──
     ctx.globalAlpha=0.12*pulse; ctx.fillStyle='#0ff';
     roundRect(cx-bW/2,retryY-bH/2,bW,bH,10); ctx.fill();
     ctx.globalAlpha=pulse; glow('#0ff',16); ctx.strokeStyle='#0ff'; ctx.lineWidth=2;
     roundRect(cx-bW/2,retryY-bH/2,bW,bH,10); ctx.stroke(); noGlow();
     ctx.globalAlpha=pulse; ctx.fillStyle='#fff';
-    ctx.font=`bold ${Math.round(H*0.026)}px monospace`;
+    ctx.font=`bold ${Math.round(H*0.024)}px monospace`;
     ctx.textBaseline='middle'; glow('#0ff',8);
     ctx.fillText('▶  TAP TO RETRY',cx,retryY); noGlow();
     ctx.textBaseline='alphabetic'; ctx.globalAlpha=1;
 
-    // ── Difficulty selector on dead screen ──
-    const diffY=H*0.895;
+    // ── CHANGE DIFFICULTY label — clearly above buttons ──
+    ctx.globalAlpha=0.4; ctx.fillStyle='#fff';
     ctx.font=`${Math.round(H*0.014)}px monospace`;
-    ctx.fillStyle='rgba(255,255,255,0.35)'; ctx.textAlign='center';
-    ctx.fillText('CHANGE DIFFICULTY',cx,diffY-H*0.038);
+    ctx.fillText('CHANGE DIFFICULTY',cx,diffLabelY);
+    ctx.globalAlpha=1;
 
-    const dBtnW=Math.min(W*0.25,88), dBtnH=H*0.048, dGap=8;
+    // ── Difficulty buttons ──
+    const dBtnW=Math.min(W*0.26,92), dBtnH=H*0.046, dGap=8;
     const dTotalW=dBtnW*3+dGap*2, dStartX=cx-dTotalW/2;
     const diffs2=['easy','normal','hard'];
     const dlabels2=['EASY','NRM','HARD'];
@@ -1114,9 +1141,7 @@ function drawDead() {
     });
 
     // ── Main Menu button ──
-    const menuY=H*0.952;
-    ctx.globalAlpha=0.7;
-    glow('#fff',6); ctx.fillStyle='#fff';
+    ctx.globalAlpha=0.75; glow('#fff',6); ctx.fillStyle='#fff';
     ctx.font=`bold ${Math.round(H*0.020)}px monospace`;
     ctx.textBaseline='middle'; ctx.textAlign='center';
     ctx.fillText('◀  MAIN MENU',cx,menuY);
